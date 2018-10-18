@@ -38,6 +38,14 @@ public class ControllersTest {
 			ResponseWriters.scBadRequest()
 					.andThen(ResponseWriters.body("Bad request")));
 
+	private static Function<HttpServletRequest, String> runtimeFailure = req -> {
+		throw new RuntimeException("Runtime error");
+	};
+
+	private static Function<HttpServletRequest, String> illegalArgFailure = req -> {
+		throw new IllegalArgumentException("Illegal argument");
+	};
+
 	@Test
 	public void shouldNotFindOnEmptyDispatcher() throws Exception {
 		Server server = createServer(Controllers.dispatcher(Collections.emptyList()));
@@ -89,19 +97,11 @@ public class ControllersTest {
 	@Test
 	public void shouldReturnInternalErrorOnFailure() throws Exception {
 		Server server = createServer(
-				Controllers.dispatcher(
-						Arrays.asList(
-								Pair.pair(
-										any,
-										Controllers.of(
-												ResponseWriters.scOk(),
-												r -> {
-													throw new RuntimeException("Some error");
-												})))));
+				Controllers.dispatcher(Arrays.asList(Pair.pair(any, Controllers.of(ResponseWriters.scOk(), runtimeFailure)))));
 		CloseableHttpResponse resp = HttpClients.createDefault().execute(new HttpGet("http://localhost:8080"));
 
 		assertThat(resp.getStatusLine().getStatusCode()).isEqualTo(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-		assertThat(EntityUtils.toString(resp.getEntity())).isEqualTo("Some error");
+		assertThat(EntityUtils.toString(resp.getEntity())).isEqualTo("Runtime error");
 
 		server.stop();
 
@@ -109,17 +109,8 @@ public class ControllersTest {
 
 	@Test
 	public void shouldHandleException() throws Exception {
-		Server server = createServer(
-				Controllers.dispatcher(
-						Arrays.asList(
-								Pair.pair(
-										any,
-										Controllers.of(
-												ControllersTest::errorHandler,
-												ResponseWriters.scOk(),
-												r -> {
-													throw new IllegalArgumentException("Some error");
-												})))));
+		Server server = createServer(Controllers.dispatcher(
+				Arrays.asList(Pair.pair(any, Controllers.of(ControllersTest::errorHandler, ResponseWriters.scOk(), illegalArgFailure)))));
 		CloseableHttpResponse resp = HttpClients.createDefault().execute(new HttpGet("http://localhost:8080"));
 
 		assertThat(resp.getStatusLine().getStatusCode()).isEqualTo(HttpServletResponse.SC_BAD_REQUEST);
@@ -131,30 +122,22 @@ public class ControllersTest {
 	@Test
 	public void shouldHandleExceptionInDispatcher() throws Exception {
 		Server server = createServer(
-				Controllers.dispatcher(
-						Arrays.asList(
-								Pair.pair(
-										any,
-										Controllers.of(
-												ControllersTest::errorHandler,
-												ResponseWriters.scOk(),
-												r -> {
-													throw new RuntimeException("Runtime error");
-												})))));
+				Controllers.dispatcher(Arrays
+						.asList(Pair.pair(any, Controllers.of(ControllersTest::errorHandler, ResponseWriters.scOk(), runtimeFailure)))));
 		CloseableHttpResponse resp = HttpClients.createDefault().execute(new HttpGet("http://localhost:8080"));
 
 		assertThat(resp.getStatusLine().getStatusCode()).isEqualTo(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-		assertThat(EntityUtils.toString(resp.getEntity())).isEqualTo("Runtime error");
+		assertThat(EntityUtils.toString(resp.getEntity())).isEqualTo("java.lang.RuntimeException: Runtime error");
 
 		server.stop();
 	}
 
-	private static Consumer<HttpServletResponse> errorHandler(RuntimeException e) {
+	private static Consumer<HttpServletResponse> errorHandler(Exception e) {
 		if (e instanceof IllegalArgumentException) {
 			return ResponseWriters.scBadRequest().andThen(ResponseWriters.body("Illegal argument"));
 		}
 
-		throw e;
+		throw new RuntimeException(e);
 	}
 
 	private static Server createServer(Controller ctrl) {

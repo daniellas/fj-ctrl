@@ -17,9 +17,9 @@ import lombok.NoArgsConstructor;
 public class Controllers {
 
 	public static Controller dispatcher(
-			List<Pair<Predicate<HttpServletRequest>, Controller>> ctrls,
 			Controller notFound,
-			Function<? super Exception, ? extends Controller> error) {
+			Function<? super Exception, ? extends Controller> error,
+			List<Pair<Predicate<HttpServletRequest>, Controller>> ctrls) {
 		return req -> resp -> {
 			try {
 				ctrls.stream()
@@ -37,7 +37,6 @@ public class Controllers {
 
 	public static Controller dispatcher(List<Pair<Predicate<HttpServletRequest>, Controller>> ctrls) {
 		return dispatcher(
-				ctrls,
 				Controllers.of(
 						ResponseWriters.scNotFound(),
 						Function.<HttpServletRequest>identity()
@@ -46,7 +45,8 @@ public class Controllers {
 				ex -> Controllers.of(
 						ResponseWriters.scInternalError(),
 						Function.<HttpServletRequest>identity()
-								.andThen(r -> Optional.ofNullable(ex.getMessage()).orElse("Internal server error"))));
+								.andThen(r -> Optional.ofNullable(ex.getMessage()).orElse("Internal server error"))),
+				ctrls);
 	}
 
 	public static Controller of(Consumer<HttpServletResponse> rw) {
@@ -60,13 +60,13 @@ public class Controllers {
 	}
 
 	public static Controller of(
-			Function<? super RuntimeException, ? extends Consumer<HttpServletResponse>> ew,
+			Function<? super Exception, ? extends Consumer<HttpServletResponse>> ew,
 			Consumer<HttpServletResponse> rw,
 			Function<? super HttpServletRequest, ? extends String> b) {
 		return req -> resp -> {
 			try {
 				rw.andThen(ResponseWriters.body(b.apply(req))).accept(resp);
-			} catch (RuntimeException e) {
+			} catch (Exception e) {
 				ew.apply(e).accept(resp);
 			}
 		};
