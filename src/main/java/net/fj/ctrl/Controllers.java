@@ -1,13 +1,13 @@
 package net.fj.ctrl;
 
-import java.nio.charset.Charset;
 import java.util.List;
 import java.util.Optional;
-import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
 import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 
 import io.atlassian.fugue.Pair;
 import lombok.AccessLevel;
@@ -18,83 +18,59 @@ public class Controllers {
 
 	public static Controller dispatcher(
 			List<Pair<Predicate<HttpServletRequest>, Controller>> ctrls,
-			Function<? super HttpServletRequest, ? extends String> notFoundTranslator,
-			BiFunction<? super HttpServletRequest, ? super Exception, ? extends String> errorTranslator) {
+			Controller notFound,
+			Function<? super Exception, ? extends Controller> error) {
 		return req -> resp -> {
 			try {
 				ctrls.stream()
 						.filter(p -> p.left().test(req))
 						.findFirst()
 						.map(Pair::right)
-						.orElseGet(() -> Controllers.notFound(notFoundTranslator))
+						.orElseGet(() -> notFound)
 						.apply(req)
 						.accept(resp);
 			} catch (Exception e) {
-				internalError(errorTranslator, e)
-						.apply(req)
-						.accept(resp);
+				error.apply(e).apply(req).accept(resp);
 			}
 		};
 	}
 
 	public static Controller dispatcher(List<Pair<Predicate<HttpServletRequest>, Controller>> ctrls) {
-		return dispatcher(ctrls, Controllers::defaultNotFoundTranslator, Controllers::defaultErrorTranslator);
+		return dispatcher(
+				ctrls,
+				Controllers.of(
+						ResponseWriters.scNotFound(),
+						Function.<HttpServletRequest>identity()
+								.andThen(RequestReaders::pathInfo)
+								.andThen(p -> p + " not found")),
+				ex -> Controllers.of(
+						ResponseWriters.scInternalError(),
+						Function.<HttpServletRequest>identity()
+								.andThen(r -> Optional.ofNullable(ex.getMessage()).orElse("Internal server error"))));
 	}
 
-	private static String defaultNotFoundTranslator(HttpServletRequest req) {
-		return "Not found";
+	public static Controller of(Consumer<HttpServletResponse> rw) {
+		return req -> resp -> rw.accept(resp);
+
 	}
 
-	private static String defaultErrorTranslator(HttpServletRequest req, Exception e) {
-		return Optional.ofNullable(e.getMessage()).orElse("Error");
+	public static Controller of(Consumer<HttpServletResponse> rw, Function<? super HttpServletRequest, ? extends String> b) {
+		return req -> resp -> rw.andThen(ResponseWriters.body(b.apply(req))).accept(resp);
+
 	}
 
-	public static Controller textPlain(String body) {
-		return req -> resp -> ResponseWriters.header("Content-Type", "text/plain")
-				.andThen(ResponseWriters.body(body))
-				.accept(resp);
-	}
+	public static Controller of(
+			Function<? super RuntimeException, ? extends Consumer<HttpServletResponse>> ew,
+			Consumer<HttpServletResponse> rw,
+			Function<? super HttpServletRequest, ? extends String> b) {
+		return req -> resp -> {
+			try {
+				rw.andThen(ResponseWriters.body(b.apply(req))).accept(resp);
+			} catch (RuntimeException e) {
+				ew.apply(e).accept(resp);
+			}
+		};
 
-	public static Controller textPlain(Charset charset, String body) {
-		return req -> resp -> ResponseWriters.header("Content-Type", "text/plain;charset=" + charset.name())
-				.andThen(ResponseWriters.body(body))
-				.accept(resp);
-	}
-
-	public static Controller notFound(Function<? super HttpServletRequest, ? extends String> f) {
-		return req -> resp -> ResponseWriters.notFound()
-				.andThen(ResponseWriters.body(f.apply(req)))
-				.accept(resp);
-	}
-
-	public static Controller notFound() {
-		return notFound(r -> "Not found");
-	}
-
-	public static Controller badReqest(Function<? super HttpServletRequest, ? extends String> f) {
-		return req -> resp -> ResponseWriters.badRequest()
-				.andThen(ResponseWriters.body(f.apply(req)))
-				.accept(resp);
-	}
-
-	public static Controller badReqest(String reason) {
-		return badReqest(r -> reason);
-	}
-
-	public static Controller internalError(Function<? super HttpServletRequest, ? extends String> f) {
-		return req -> resp -> ResponseWriters.internalError()
-				.andThen(ResponseWriters.body(f.apply(req)))
-				.accept(resp);
-	}
-
-	public static Controller internalError(String reason) {
-		return internalError(r -> reason);
-	}
-
-	public static Controller internalError(BiFunction<? super HttpServletRequest, ? super Exception, ? extends String> f, Exception e) {
-		return req -> resp -> ResponseWriters.internalError()
-				.andThen(ResponseWriters.body(f.apply(req, e)))
-				.accept(resp);
 	}
 
 }
