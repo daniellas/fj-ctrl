@@ -2,6 +2,7 @@ package net.fj.ctrl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -15,12 +16,10 @@ import org.apache.http.util.EntityUtils;
 import org.eclipse.jetty.server.Server;
 import org.junit.Test;
 
-import net.fj.ctrl.Controllers.ResponseWriter;
-
 public class ControllersTest {
 
 	@Test
-	public void shouldHandleViaMethodRefCtrl() throws Exception {
+	public void shouldHandleViaMethodRef() throws Exception {
 		Server server = Jetty.createServer(ControllersTest::helloCtrl);
 		CloseableHttpResponse resp = HttpClients.createDefault().execute(new HttpGet("http://localhost:8080"));
 
@@ -32,12 +31,23 @@ public class ControllersTest {
 
 	@Test
 	public void shoudHandleViaFunctions() throws Exception {
-		Function<String, Consumer<HttpServletResponse>> writer = ControllersTest::writeTextPlain;
-		Server server = Jetty.createServer(Controllers.of(writer.compose(ControllersTest::echo), RequestReaders::pathInfo));
+		Server server = Jetty.createServer(Controller.of(plainTextWriter.compose(ControllersTest::echo), RequestReaders::pathInfo));
 		CloseableHttpResponse resp = HttpClients.createDefault().execute(new HttpGet("http://localhost:8080/index.html"));
 
 		assertThat(resp.getStatusLine().getStatusCode()).isEqualTo(HttpServletResponse.SC_OK);
 		assertThat(EntityUtils.toString(resp.getEntity())).isEqualTo("Echo /index.html");
+
+		server.stop();
+	}
+
+	@Test
+	public void shoudCatchError() throws Exception {
+		Server server = Jetty.createServer(
+				Controller.<String>safe(errorWriter).apply(plainTextWriter.compose(ControllersTest::echo), RequestReaders::pathInfo));
+		CloseableHttpResponse resp = HttpClients.createDefault().execute(new HttpGet("http://localhost:8080/error"));
+
+		assertThat(resp.getStatusLine().getStatusCode()).isEqualTo(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+		assertThat(EntityUtils.toString(resp.getEntity())).isEqualTo("Illegal argument /error");
 
 		server.stop();
 	}
@@ -48,13 +58,21 @@ public class ControllersTest {
 	}
 
 	private static String echo(String v) {
+		if ("/error".equals(v)) {
+			throw new IllegalArgumentException("Illegal argument " + v);
+		}
+
 		return "Echo " + v;
 	}
 
-	private static Consumer<HttpServletResponse> writeTextPlain(String body) {
-		return ResponseWriters.status(HttpServletResponse.SC_OK)
-				.andThen(ResponseWriters.header("Content-Type", "text/plain"))
-				.andThen(ResponseWriters.body(body));
-	}
+	private final Function<String, Consumer<HttpServletResponse>> plainTextWriter = b -> ResponseWriters.status(HttpServletResponse.SC_OK)
+			.andThen(ResponseWriters.header(Headers.CONTENT_TYPE, MediaTypes.TEXT_PLAIN))
+			.andThen(ResponseWriters.body(b));
+
+	private static Function<RuntimeException, Controller> errorWriter = e -> Controller.of(
+			resp -> ResponseWriters.status(HttpServletResponse.SC_INTERNAL_SERVER_ERROR)
+					.andThen(ResponseWriters.header(Headers.CONTENT_TYPE, MediaTypes.TEXT_PLAIN))
+					.andThen(ResponseWriters.body(Optional.ofNullable(e.getMessage()).orElse("Error"))),
+			req -> null);
 
 }
